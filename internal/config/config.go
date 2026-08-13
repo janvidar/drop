@@ -20,13 +20,28 @@ import (
 
 // Config is the whole of dropd's configuration.
 type Config struct {
-	Server  Server            `toml:"server"`
-	Control Control           `toml:"control"`
-	Limits  Limits            `toml:"limits"`
-	STUN    map[string]Family `toml:"stun"`
-	Egress  Egress            `toml:"egress"`
-	Metrics Metrics           `toml:"metrics"`
-	State   State             `toml:"state"`
+	Server      Server            `toml:"server"`
+	Control     Control           `toml:"control"`
+	Limits      Limits            `toml:"limits"`
+	STUN        map[string]Family `toml:"stun"`
+	Egress      Egress            `toml:"egress"`
+	Metrics     Metrics           `toml:"metrics"`
+	State       State             `toml:"state"`
+	Development Development       `toml:"development"`
+}
+
+// Development relaxes checks that would otherwise make local testing
+// impossible. Every field here is named to be conspicuous in a config file and
+// in a grep, because each one disables a check that exists for a reason.
+type Development struct {
+	// AllowUnroutableAdvertise permits loopback and private addresses in the
+	// advertised fields, so that the whole daemon can be run on 127.0.0.0/8.
+	//
+	// In production this check is what catches the bind-versus-advertise
+	// mistake -- publishing an interface address from behind NAT, which
+	// produces a server that works locally and hands every client an
+	// unreachable OTHER-ADDRESS.
+	AllowUnroutableAdvertise bool `toml:"allow_unroutable_advertise"`
 }
 
 // Server is the service's public identity. The abuse contact is required, not
@@ -215,7 +230,7 @@ func (c Config) Validate() error {
 		if err != nil {
 			return err
 		}
-		if err := f.validate(name, want, used); err != nil {
+		if err := f.validate(name, want, used, c.Development.AllowUnroutableAdvertise); err != nil {
 			return err
 		}
 	}
@@ -265,7 +280,7 @@ func familyOf(name string) (bool /*wantV4*/, error) {
 	}
 }
 
-func (f Family) validate(name string, wantV4 bool, used portClaims) error {
+func (f Family) validate(name string, wantV4 bool, used portClaims, allowUnroutable bool) error {
 	if f.PrimaryBind == "" || f.PrimaryAdvertise == "" {
 		return fmt.Errorf("stun.%s: primary_bind and primary_advertise are required", name)
 	}
@@ -277,7 +292,7 @@ func (f Family) validate(name string, wantV4 bool, used portClaims) error {
 	if err != nil {
 		return err
 	}
-	primaryAdv, err := parseAdvertised(name, "primary_advertise", f.PrimaryAdvertise, wantV4)
+	primaryAdv, err := parseAdvertised(name, "primary_advertise", f.PrimaryAdvertise, wantV4, allowUnroutable)
 	if err != nil {
 		return err
 	}
@@ -296,7 +311,7 @@ func (f Family) validate(name string, wantV4 bool, used portClaims) error {
 	if err != nil {
 		return err
 	}
-	alternateAdv, err := parseAdvertised(name, "alternate_advertise", f.AlternateAdvertise, wantV4)
+	alternateAdv, err := parseAdvertised(name, "alternate_advertise", f.AlternateAdvertise, wantV4, allowUnroutable)
 	if err != nil {
 		return err
 	}
@@ -381,10 +396,13 @@ func parseFamilyAddr(section, field, value string, wantV4 bool) (netip.Addr, err
 // one there means the operator published an interface address from behind NAT,
 // which is exactly the bind-versus-advertise mistake this config shape exists
 // to prevent.
-func parseAdvertised(section, field, value string, wantV4 bool) (netip.Addr, error) {
+func parseAdvertised(section, field, value string, wantV4, allowUnroutable bool) (netip.Addr, error) {
 	addr, err := parseFamilyAddr(section, field, value, wantV4)
 	if err != nil {
 		return netip.Addr{}, err
+	}
+	if allowUnroutable {
+		return addr, nil
 	}
 	if class := ipclass.Of(addr); !class.Routable() {
 		return netip.Addr{}, fmt.Errorf("stun.%s: %s: %s classifies as %q and is "+

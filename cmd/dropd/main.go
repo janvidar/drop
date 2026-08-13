@@ -71,6 +71,14 @@ func run() error {
 		return nil
 	}
 
+	if cfg.Development.AllowUnroutableAdvertise {
+		// Loud, and at warn level, because this disables the check that
+		// catches an unreachable advertised address -- the one misconfiguration
+		// that is invisible from the server itself.
+		log.Warn("DEVELOPMENT MODE: unroutable advertised addresses are allowed; " +
+			"do not run this configuration in production")
+	}
+
 	if err := os.MkdirAll(cfg.State.Dir, 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
