@@ -177,6 +177,50 @@ func TestParseRejectsExpired(t *testing.T) {
 	}
 }
 
+// Unpadded base64 of a 32-byte value has two bits in its last character that
+// carry no data, so a permissive decoder accepts several spellings of the same
+// value. With single-use tracked by identifier string, each accepted spelling
+// would buy another run of the inbound test -- a single-use and rate-limit
+// bypass costing an attacker one character.
+func TestSingleUseSurvivesEncodingVariants(t *testing.T) {
+	m := newManager(t)
+	addr := netip.MustParseAddr("203.0.113.7")
+	s, err := m.Issue(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Consume(s); err != nil {
+		t.Fatal(err)
+	}
+
+	alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	payloadB64, macB64, _ := strings.Cut(s.ID, ".")
+
+	tried := 0
+	for _, c := range alphabet {
+		for _, variant := range []string{
+			payloadB64[:len(payloadB64)-1] + string(c) + "." + macB64,
+			payloadB64 + "." + macB64[:len(macB64)-1] + string(c),
+		} {
+			if variant == s.ID {
+				continue
+			}
+			parsed, err := m.Parse(variant, addr)
+			if err != nil {
+				continue // rejected outright, which is the ideal outcome
+			}
+			tried++
+			// It validated, so it must be recognised as the same session.
+			if err := m.Consume(parsed); !errors.Is(err, ErrAlreadyRan) {
+				t.Fatalf("variant %q was accepted as a fresh session (err = %v): "+
+					"single use can be bypassed by respelling the identifier",
+					variant[len(variant)-8:], err)
+			}
+		}
+	}
+	t.Logf("%d encoding variants validated; all were recognised as the same session", tried)
+}
+
 func TestConsumeIsSingleUse(t *testing.T) {
 	m := newManager(t)
 	s, err := m.Issue(netip.MustParseAddr("203.0.113.7"))
@@ -327,14 +371,20 @@ func TestDomainSeparation(t *testing.T) {
 	}
 }
 
+// flipLast changes the last character of a base64 field to a different value.
+//
+// The replacement must itself be a valid strict encoding, or the decoder
+// rejects it as malformed before the MAC is ever checked and the caller sees
+// the wrong error. Both 'A' (index 0) and 'Q' (index 16) have zero in the two
+// low bits, which is what strict unpadded base64 requires of a final character
+// here.
 func flipLast(s string) string {
 	if s == "" {
 		return "x"
 	}
-	last := s[len(s)-1]
 	repl := byte('A')
-	if last == 'A' {
-		repl = 'B'
+	if s[len(s)-1] == 'A' {
+		repl = 'Q'
 	}
 	return s[:len(s)-1] + string(repl)
 }

@@ -86,6 +86,23 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// STUN comes up before the control plane. A client that has been handed
+	// session credentials must find the STUN endpoints already listening, and
+	// binding four UDP sockets per family is the step most likely to fail on a
+	// misconfigured host -- better to fail before accepting any traffic.
+	stunServers, err := srv.STUNServers("dropd " + version)
+	if err != nil {
+		return err
+	}
+	for _, st := range stunServers {
+		if err := st.Start(); err != nil {
+			return err
+		}
+		defer st.Close()
+		log.Info("stun listening", "family", st.Family,
+			"endpoints", len(st.Endpoints), "behaviour_discovery", st.HasAlternate())
+	}
+
 	var servers []*http.Server
 
 	// HTTPS: the real control plane.

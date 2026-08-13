@@ -37,9 +37,21 @@ var (
 	ErrTooMany     = errors.New("too many concurrent sessions")
 )
 
-// enc is the encoding for every token in this package: URL-safe and
-// unpadded, so tokens are safe in a path segment and in a single ASCII line.
-var enc = base64.RawURLEncoding
+// enc is the encoding for every token in this package: URL-safe and unpadded,
+// so tokens are safe in a path segment and in a single ASCII line.
+//
+// dec is deliberately Strict. Unpadded base64 of a 32-byte value has two bits
+// in its final character that carry no data, so the permissive decoder accepts
+// four distinct strings for every value. Combined across the two halves of a
+// session identifier that is sixteen strings per session -- and because
+// single-use is tracked by identifier, each one would buy another run of the
+// inbound test. Strict decoding rejects the variants, and every derivation
+// below additionally keys off the decoded bytes rather than the string, so
+// neither mechanism alone has to be relied on.
+var (
+	enc = base64.RawURLEncoding
+	dec = base64.RawURLEncoding.Strict()
+)
 
 // Session is an issued authorisation.
 type Session struct {
@@ -53,6 +65,11 @@ type Session struct {
 	// scoped to this session.
 	STUNUsername string
 	STUNPassword string
+
+	// key is the decoded payload: the canonical identity of this session,
+	// independent of how the identifier was spelled on the wire. Everything
+	// derived from a session keys off this rather than off the string.
+	key string
 }
 
 // Manager issues and validates sessions.
@@ -63,7 +80,7 @@ type Manager struct {
 	now    func() time.Time
 
 	mu   sync.Mutex
-	used map[string]time.Time // session id -> when it ran its inbound test
+	used map[string]time.Time // canonical session key -> its expiry
 }
 
 // NewManager returns a Manager. The secret must be at least 32 bytes and is
@@ -121,7 +138,8 @@ func (m *Manager) Issue(addr netip.Addr) (Session, error) {
 		Addr:         addr,
 		Expires:      expires,
 		STUNUsername: id,
-		STUNPassword: m.derive("stun-password", id),
+		STUNPassword: m.derive("stun-password", string(payload)),
+		key:          string(payload),
 	}, nil
 }
 
@@ -139,11 +157,11 @@ func (m *Manager) Parse(id string, from netip.Addr) (Session, error) {
 	if !ok {
 		return Session{}, ErrMalformed
 	}
-	payload, err := enc.DecodeString(payloadB64)
+	payload, err := dec.DecodeString(payloadB64)
 	if err != nil || len(payload) != 32 {
 		return Session{}, ErrMalformed
 	}
-	gotMAC, err := enc.DecodeString(macB64)
+	gotMAC, err := dec.DecodeString(macB64)
 	if err != nil {
 		return Session{}, ErrMalformed
 	}
@@ -169,8 +187,38 @@ func (m *Manager) Parse(id string, from netip.Addr) (Session, error) {
 		Addr:         addr,
 		Expires:      expires,
 		STUNUsername: id,
-		STUNPassword: m.derive("stun-password", id),
+		STUNPassword: m.derive("stun-password", string(payload)),
+		key:          string(payload),
 	}, nil
+}
+
+// Credential resolves a session identifier to its STUN short-term password.
+//
+// It validates the token's authenticity and expiry but not the source address,
+// unlike Parse. The STUN agent runs on the client's own UDP socket, which may
+// legitimately have picked a different source address than the control
+// connection on a multi-homed or privacy-extension host, and rejecting that
+// would break conforming clients. Nothing is lost by allowing it: the
+// credential only authorises use of a STUN server that answers anonymous
+// Binding Requests anyway.
+func (m *Manager) Credential(id string) (string, bool) {
+	payloadB64, macB64, ok := strings.Cut(id, ".")
+	if !ok {
+		return "", false
+	}
+	payload, err := dec.DecodeString(payloadB64)
+	if err != nil || len(payload) != 32 {
+		return "", false
+	}
+	gotMAC, err := dec.DecodeString(macB64)
+	if err != nil || !hmac.Equal(gotMAC, m.mac("sid", payload)) {
+		return "", false
+	}
+	expires := time.Unix(int64(binary.BigEndian.Uint64(payload[:8])), 0)
+	if m.now().After(expires) {
+		return "", false
+	}
+	return m.derive("stun-password", string(payload)), true
 }
 
 // Consume marks a session's inbound test as run, and reports ErrAlreadyRan on
@@ -181,7 +229,7 @@ func (m *Manager) Consume(s Session) error {
 
 	m.sweepLocked()
 
-	if _, seen := m.used[s.ID]; seen {
+	if _, seen := m.used[s.key]; seen {
 		return ErrAlreadyRan
 	}
 	if len(m.used) >= m.max {
@@ -190,7 +238,7 @@ func (m *Manager) Consume(s Session) error {
 		// turning single-use into unlimited-use.
 		return ErrTooMany
 	}
-	m.used[s.ID] = s.Expires
+	m.used[s.key] = s.Expires
 	return nil
 }
 
@@ -218,7 +266,7 @@ func (m *Manager) Active() int {
 // on one port proves nothing about another, and it needs no storage. An
 // attacker who sees a nonce learns nothing that lets them predict the next.
 func (m *Manager) Nonce(s Session, proto string, port int) string {
-	return m.derive("nonce", fmt.Sprintf("%s|%s|%d", s.ID, proto, port))
+	return m.derive("nonce", fmt.Sprintf("%s|%s|%d", s.key, proto, port))
 }
 
 // VerifyNonce compares a returned nonce in constant time.
