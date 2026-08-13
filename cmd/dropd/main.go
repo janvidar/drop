@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 
 	"quickdc.org/drop/internal/config"
 	"quickdc.org/drop/internal/control"
+	"quickdc.org/drop/internal/egress"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
@@ -101,6 +103,22 @@ func run() error {
 		defer st.Close()
 		log.Info("stun listening", "family", st.Family,
 			"endpoints", len(st.Endpoints), "behaviour_discovery", st.HasAlternate())
+	}
+
+	// Egress banner listeners. They bind wildcard so both families answer,
+	// which is what the test needs: a client blocked on IPv4 may still reach
+	// us over IPv6, and that difference is itself a useful diagnosis.
+	if len(cfg.Egress.BannerPorts) > 0 {
+		reg := srv.Metrics()
+		set, err := egress.Start(cfg.Egress.BannerPorts, nil, log, func(port int) {
+			reg.Count("drop_egress_connections_total", "Egress banner connections.",
+				"port", strconv.Itoa(port))
+		})
+		if err != nil {
+			return err
+		}
+		defer set.Close()
+		log.Info("egress listening", "ports", cfg.Egress.BannerPorts)
 	}
 
 	var servers []*http.Server
