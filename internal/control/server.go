@@ -112,7 +112,7 @@ func (s *Server) buildServerDoc() ServerDoc {
 		// Only tests that are actually implemented are advertised, so a client
 		// never sees a capability the server cannot deliver. "udp" joins this
 		// list when the inbound UDP probe lands.
-		tests := []string{"tcp", "egress"}
+		tests := []string{"tcp", "udp", "egress"}
 		if f.HasAlternate() {
 			tests = append(tests, "nat")
 		}

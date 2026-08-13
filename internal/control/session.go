@@ -72,17 +72,9 @@ type InboundResponse struct {
 	SessionID string            `json:"session_id"`
 	Observed  ObservedDoc       `json:"observed"`
 	TCP       []probe.TCPResult `json:"tcp,omitempty"`
-	UDP       []UDPResultDoc    `json:"udp,omitempty"`
+	UDP       []probe.UDPResult `json:"udp,omitempty"`
 	Notes     []string          `json:"notes,omitempty"`
 	ElapsedMS int               `json:"elapsed_ms"`
-}
-
-// UDPResultDoc is a placeholder until the UDP probe lands; the field exists so
-// clients can be written against the final shape.
-type UDPResultDoc struct {
-	Port    int    `json:"port"`
-	Verdict string `json:"verdict"`
-	Detail  string `json:"detail,omitempty"`
 }
 
 func (s *Server) handleSessionCreate(w http.ResponseWriter, r *http.Request) {
@@ -195,15 +187,15 @@ func (s *Server) handleSessionInbound(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(udpPorts) > 0 {
-		// The UDP probe is not implemented yet. Saying so explicitly is better
-		// than silently returning nothing, which a client would read as "no
-		// datagram arrived" and report to the user as a blocked firewall.
-		for _, port := range udpPorts {
-			resp.UDP = append(resp.UDP, UDPResultDoc{
-				Port:    port,
-				Verdict: "unavailable",
-				Detail:  "this server does not yet implement the inbound UDP probe",
-			})
+		prober := &probe.UDPProber{
+			LocalAddr: s.probeSourceFor(peer.Addr()),
+			Timeout:   s.cfg.Limits.ProbeTimeout.Duration,
+		}
+		resp.UDP = prober.ProbeUDPAll(ctx, sess.Addr, udpPorts,
+			sess.STUNUsername, sess.STUNPassword)
+		for _, res := range resp.UDP {
+			s.metrics.Count("drop_udp_probes_total", "Inbound UDP probes by verdict.",
+				"verdict", string(res.Verdict))
 		}
 	}
 

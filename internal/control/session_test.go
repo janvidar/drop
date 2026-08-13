@@ -14,6 +14,7 @@ import (
 
 	"quickdc.org/drop/internal/config"
 	"quickdc.org/drop/internal/probe"
+	"quickdc.org/drop/internal/stun"
 )
 
 // loopbackConfig probes from and to 127.0.0.1, so the whole session flow can
@@ -314,11 +315,37 @@ func TestInboundRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// UDP is not implemented yet. It must say so rather than returning nothing,
-// which a client would read as "no datagram arrived" and show the user as a
-// blocked firewall.
-func TestInboundUDPReportsUnavailable(t *testing.T) {
+// The UDP probe end to end: the server sends an authenticated Binding Request
+// from an unsolicited source, and the stand-in client answers it.
+func TestInboundUDPOpen(t *testing.T) {
 	s := newTestServerWith(t, loopbackConfig())
+	h := s.Handler()
+
+	sess := openSession(t, h, "127.0.0.1:51343")
+	port := udpClient(t, sess.Creds.Password)
+
+	rec := postJSON(t, h, "/v1/session/"+sess.SessionID+"/inbound", "127.0.0.1:51343",
+		InboundRequest{UDP: []int{port}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
+	}
+	var resp InboundResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.UDP) != 1 {
+		t.Fatalf("got %d udp results, want 1", len(resp.UDP))
+	}
+	if resp.UDP[0].Verdict != probe.UDPOpen {
+		t.Errorf("verdict = %q (%s), want open", resp.UDP[0].Verdict, resp.UDP[0].Detail)
+	}
+}
+
+// Nothing listening on the UDP port: no_response, never open.
+func TestInboundUDPNoResponse(t *testing.T) {
+	cfg := loopbackConfig()
+	cfg.Limits.ProbeTimeout = config.Duration{Duration: 600 * time.Millisecond}
+	s := newTestServerWith(t, cfg)
 	h := s.Handler()
 	sess := openSession(t, h, "127.0.0.1:51343")
 
@@ -329,9 +356,44 @@ func TestInboundUDPReportsUnavailable(t *testing.T) {
 	}
 	var resp InboundResponse
 	json.Unmarshal(rec.Body.Bytes(), &resp)
-	if len(resp.UDP) != 1 || resp.UDP[0].Verdict != "unavailable" {
-		t.Errorf("udp = %+v, want a single unavailable verdict", resp.UDP)
+	if len(resp.UDP) != 1 || resp.UDP[0].Verdict != probe.UDPNoResponse {
+		t.Errorf("udp = %+v, want a single no_response verdict", resp.UDP)
 	}
+}
+
+// The credentials handed out with the session are what the probe is signed
+// with, so a client holding them can validate the probe and answer it. A
+// client MUST refuse to answer anything else.
+func udpClient(t *testing.T, password string) int {
+	t.Helper()
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			if !stun.Looks(buf[:n]) {
+				continue
+			}
+			msg, err := stun.Decode(buf[:n])
+			if err != nil || !msg.CheckMessageIntegrity([]byte(password)) {
+				continue
+			}
+			resp := stun.NewResponse(msg)
+			resp.AddXORAddress(stun.AttrXORMappedAddress, from.AddrPort())
+			resp.AddMessageIntegrity([]byte(password))
+			conn.WriteToUDP(resp.Encode(), from)
+		}
+	}()
+
+	return int(netip.MustParseAddrPort(conn.LocalAddr().String()).Port())
 }
 
 // A client whose address cannot receive inbound traffic at all should be told
