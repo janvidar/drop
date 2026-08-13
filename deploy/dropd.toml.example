@@ -1,0 +1,104 @@
+# dropd configuration.
+#
+# The values below are the real ones for drop-de.quickdc.org; adapt for other
+# deployments. Anything omitted takes the built-in default, and an unknown key
+# is a startup error rather than a silent no-op -- a typo in a rate limit
+# should not be discovered by being abused.
+
+[server]
+name = "drop-de.quickdc.org"
+operator = "quickdc.org"
+# Required. This daemon opens TCP connections to residential addresses, and
+# some of those will be noticed. A complaint with nowhere to go becomes a
+# suspended host, so there is no default for this.
+abuse_contact = "abuse@quickdc.org"
+
+[control]
+# All three names must resolve to this host: the dual-stack name, a v4-only
+# name and a v6-only name. Clients use the family-specific names so that the
+# family under test is never ambiguous.
+hostnames = [
+  "drop-de.quickdc.org",
+  "v4.drop-de.quickdc.org",
+  "v6.drop-de.quickdc.org",
+]
+
+https_addr = ":443"
+http_addr = ":80"
+
+# Certificates are obtained in-process over TLS-ALPN-01 on port 443, so no
+# certbot, no renewal hook, and no certificate files to keep readable by a
+# non-root daemon. Set acme_email to be told before a certificate expires.
+acme_email = "hostmaster@quickdc.org"
+
+# Point at Let's Encrypt staging while testing, to avoid burning the
+# production rate limit on a misconfiguration:
+# acme_directory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+# To use an existing certificate instead of ACME, set both of these and
+# acme_* is ignored:
+# tls_cert = "/etc/ssl/certs/drop.pem"
+# tls_key = "/etc/ssl/private/drop.key"
+
+[limits]
+max_ports_per_test = 4
+# Ports below 1024 are refused by default. Behind carrier-grade NAT a probe
+# aimed at "the client" can land on a different subscriber, and this keeps the
+# common administrative services out of reach when that happens.
+min_port = 1024
+probe_timeout = "5s"
+inbound_deadline = "15s"
+session_ttl = "60s"
+sessions_per_hour = 12
+max_sessions = 4096
+
+[egress]
+# Ports where the server speaks first with "DROP/1 EGRESS <port>". 80 and 443
+# are not listed here: they carry the control plane and cannot speak first, so
+# the egress test there is a /v1/server fetch instead.
+banner_ports = [411, 412, 1511, 5000]
+
+[metrics]
+# Unauthenticated. Keep it on loopback.
+addr = "127.0.0.1:9779"
+
+[state]
+dir = "/var/lib/dropd"
+
+# ---------------------------------------------------------------------------
+# STUN endpoints.
+#
+# bind is what the socket binds. advertise is what goes into OTHER-ADDRESS and
+# RESPONSE-ORIGIN, and what clients are told to talk to. They are separate
+# because on DigitalOcean -- and other providers with the same design -- a
+# Reserved IP is delivered by translating it to a hidden per-host anchor
+# address. The machine never sees the reserved address on any interface, so the
+# socket must bind the anchor while clients must be told the public address.
+#
+# Deriving one from the other yields a server that passes every local test and
+# publishes an unreachable OTHER-ADDRESS in production. Verify from outside:
+# send from the bound socket to an external reflector and confirm the observed
+# source is the advertised address.
+# ---------------------------------------------------------------------------
+
+[stun.ipv4]
+primary_bind = "201.79.4.56"
+primary_advertise = "201.79.4.56"
+primary_port = 3478
+# No second IPv4 address yet, so this family will not advertise "nat".
+# Once a DigitalOcean Reserved IP is attached, uncomment and set these; the
+# bind address is the anchor shown as 10.19.0.6 on eth0, not the reserved IP.
+# alternate_bind = "10.19.0.6"
+# alternate_advertise = "<the reserved IP>"
+# alternate_port = 3479
+
+[stun.ipv6]
+# The droplet has a routed /64, so a second IPv6 address costs nothing and
+# behaviour discovery works on IPv6 from day one. The second address must be
+# added to eth0 (see deploy/README.md).
+primary_bind = "2a03:b0c0:3:f0:0:2:ce4c:7000"
+primary_advertise = "2a03:b0c0:3:f0:0:2:ce4c:7000"
+primary_port = 3478
+alternate_bind = "2a03:b0c0:3:f0:0:2:ce4c:7001"
+alternate_advertise = "2a03:b0c0:3:f0:0:2:ce4c:7001"
+alternate_port = 3479

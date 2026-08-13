@@ -1,0 +1,6 @@
+/dropd
+/dropcheck
+/dist/
+*.pem
+*.crt
+*.key
