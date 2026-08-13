@@ -16,6 +16,7 @@ import (
 	"quickdc.org/drop/internal/ipclass"
 	"quickdc.org/drop/internal/metrics"
 	"quickdc.org/drop/internal/ratelimit"
+	"quickdc.org/drop/internal/session"
 )
 
 // maxBodyBytes caps request bodies. Every legitimate DROP request is a few
@@ -29,38 +30,53 @@ type Server struct {
 	log *slog.Logger
 	now func() time.Time
 
-	// cheap limits the unauthenticated informational endpoints; sessions
+	// cheap limits the unauthenticated informational endpoints; sessionLimit
 	// limits the endpoints that cause the server to emit traffic. They are
 	// separate because /v1/whoami costs nothing and should stay usable even
 	// when a client has exhausted its probing budget.
-	cheap    *ratelimit.Limiter
-	sessions *ratelimit.Limiter
+	cheap        *ratelimit.Limiter
+	sessionLimit *ratelimit.Limiter
 
+	sessions  *session.Manager
 	metrics   *metrics.Registry
 	serverDoc ServerDoc
 }
 
 // New builds a Server from configuration.
-func New(cfg config.Config, log *slog.Logger) *Server {
+//
+// The secret is the per-server key behind every session token, challenge nonce
+// and STUN credential. It is passed in rather than generated here so that it
+// can live in the state directory and survive a restart; regenerating it would
+// invalidate every session in flight.
+func New(cfg config.Config, log *slog.Logger, secret []byte) (*Server, error) {
+	sessions, err := session.NewManager(secret,
+		cfg.Limits.SessionTTL.Duration, cfg.Limits.MaxSessions)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
-		cfg:     cfg,
-		log:     log,
-		now:     time.Now,
-		metrics: metrics.New(),
+		cfg:      cfg,
+		log:      log,
+		now:      time.Now,
+		metrics:  metrics.New(),
+		sessions: sessions,
 		cheap: ratelimit.New(ratelimit.Config{
 			Host:       ratelimit.Rule{Every: time.Second, Burst: 30},
 			Prefix:     ratelimit.Rule{Every: time.Second / 4, Burst: 120},
 			MaxEntries: 8192,
 		}),
-		sessions: ratelimit.New(ratelimit.DefaultConfig(cfg.Limits.SessionsPerHour)),
+		sessionLimit: ratelimit.New(ratelimit.DefaultConfig(cfg.Limits.SessionsPerHour)),
 	}
 	s.serverDoc = s.buildServerDoc()
 
 	s.metrics.RegisterRuntime()
 	s.metrics.Gauge("drop_ratelimit_buckets", "Rate-limit buckets currently held.",
-		func() float64 { return float64(s.cheap.Len() + s.sessions.Len()) })
+		func() float64 { return float64(s.cheap.Len() + s.sessionLimit.Len()) })
+	s.metrics.Gauge("drop_sessions_consumed", "Sessions that have run their inbound test.",
+		func() float64 { return float64(s.sessions.Active()) })
 
-	return s
+	return s, nil
 }
 
 // Metrics returns the registry, so main can expose it on the loopback
@@ -93,10 +109,10 @@ func (s *Server) buildServerDoc() ServerDoc {
 
 	stun := &STUNDoc{}
 	for family, f := range s.cfg.STUN {
-		// P0 advertises only the tests that are actually implemented. Each
-		// later phase adds its own capability string here, so a client never
-		// sees a test advertised before the server can run it.
-		tests := []string{"egress"}
+		// Only tests that are actually implemented are advertised, so a client
+		// never sees a capability the server cannot deliver. "udp" joins this
+		// list when the inbound UDP probe lands.
+		tests := []string{"tcp", "egress"}
 		if f.HasAlternate() {
 			tests = append(tests, "nat")
 		}
@@ -153,6 +169,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/server", s.handleServer)
 	mux.HandleFunc("GET /v1/whoami", s.handleWhoami)
+	mux.HandleFunc("POST /v1/session", s.handleSessionCreate)
+	mux.HandleFunc("POST /v1/session/{id}/inbound", s.handleSessionInbound)
 	mux.HandleFunc("GET /", s.handleLanding)
 	return s.withCommonHeaders(mux)
 }

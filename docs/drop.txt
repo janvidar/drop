@@ -317,13 +317,25 @@ Runs the inbound probes. Request:
     {
       "tcp": [1511],
       "udp": [1511],
-      "local": { "tcp_port": 1511, "udp_port": 1511 }
+      "control_port": 51343
     }
 
-"local" is optional and purely diagnostic: it lets the server report whether a
-NAT rewrote the port. Ports listed in "tcp" and "udp" are the ports as the
-client believes them to be reachable from outside -- that is, after any port
-forward.
+Ports listed in "tcp" and "udp" are the ports as the client believes them to be
+reachable from outside -- that is, after any port forward.
+
+"control_port" is optional and purely diagnostic: it is the local source port
+of this very control connection, as the client's own socket reports it.
+Comparing it against the port the server observed reveals TCP source-port
+rewriting, and so tells the client that a NAT is in the path before any probe
+verdict comes back.
+
+    This field has to be defined precisely, because the looser reading is
+    actively wrong. A client's *listening* port compared against the port it
+    nominated tells the server nothing the client did not already know, and a
+    server that compares a listening port against an observed source port
+    reports source-port rewriting for every correctly configured client. The
+    only local port the server can say anything useful about is the one at the
+    other end of the connection it is currently serving.
 
 The request is blocking. The server runs all probes concurrently and responds
 when the last one settles or the timeout expires, whichever comes first; a
@@ -913,7 +925,7 @@ An IPv4 client on a home router with no port forward configured.
 The client arms its listeners, then:
 
     > POST /v1/session/0e5f9c1a7b2d4e88/inbound HTTP/1.1
-    > { "tcp": [1511], "udp": [1511], "local": { "tcp_port": 1511 } }
+    > { "tcp": [1511], "udp": [1511], "control_port": 51343 }
 
 The server connects to 203.0.113.7:1511 and times out; it sends a Binding
 Request to 203.0.113.7:1511 and hears nothing.

@@ -72,11 +72,15 @@ func run() error {
 	if err := os.MkdirAll(cfg.State.Dir, 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-	if _, err := loadOrCreateSecret(cfg.State.Dir); err != nil {
+	secret, err := loadOrCreateSecret(cfg.State.Dir)
+	if err != nil {
 		return err
 	}
 
-	srv := control.New(cfg, log)
+	srv, err := control.New(cfg, log, secret)
+	if err != nil {
+		return err
+	}
 	handler := srv.Handler()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

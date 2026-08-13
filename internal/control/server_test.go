@@ -40,10 +40,21 @@ func testConfig() config.Config {
 	return c
 }
 
+var testSecret = []byte("0123456789abcdef0123456789abcdef")
+
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
+	return newTestServerWith(t, testConfig())
+}
+
+func newTestServerWith(t *testing.T, cfg config.Config) *Server {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(testConfig(), log)
+	s, err := New(cfg, log, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 func do(t *testing.T, h http.Handler, method, target, remoteAddr string) *httptest.ResponseRecorder {
@@ -221,7 +232,7 @@ func TestServerDocAdvertisesNeverBindAddresses(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := newTestServerWith(t, cfg)
 	rec := do(t, s.Handler(), "GET", "/v1/server", "203.0.113.7:51343")
 
 	if strings.Contains(rec.Body.String(), "10.19.0.6") {

@@ -93,7 +93,10 @@ type ErrorDoc struct {
 // else -- is what keeps this service from being an aimable port scanner, and a
 // rule enforced only by review is a rule that eventually breaks.
 func requestBodyTypes() []any {
-	return []any{}
+	return []any{
+		SessionRequest{},
+		InboundRequest{},
+	}
 }
 
 // Error codes. These are part of the wire contract: clients switch on them.
