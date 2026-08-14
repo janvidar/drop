@@ -207,6 +207,11 @@ func Combine(decisions []Decision) string {
 			"no change to your active-mode setting is recommended."
 	}
 
+	// Describe only the families actually decided. A family that errored is
+	// absent from this slice, and calling it "passive" would assert something
+	// the run never established.
+	both := len(decisions) > 1
+
 	switch len(activeFamilies) {
 	case 0:
 		return "Passive on every address family that could be tested. Other " +
@@ -214,9 +219,15 @@ func Combine(decisions []Decision) string {
 			"with other passive users will not work at all."
 	case 1:
 		if activeFamilies[0] == IPv6 {
+			if !both {
+				return "Active on IPv6. IPv4 was not tested."
+			}
 			return "Active on IPv6, passive on IPv4. This is a good position: you " +
 				"can connect directly with any other IPv6 client, which is most of " +
 				"what carrier-grade NAT would otherwise cost you."
+		}
+		if !both {
+			return "Active on IPv4. IPv6 was not tested."
 		}
 		return "Active on IPv4, passive on IPv6."
 	default:

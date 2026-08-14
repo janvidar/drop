@@ -11,8 +11,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,8 +52,8 @@ type report struct {
 func run() error {
 	var (
 		server      = flag.String("server", "", "base URL, e.g. https://drop.example.org (required)")
-		v4Host      = flag.String("v4", "", "IPv4-only base URL (default: the -server host prefixed with v4.)")
-		v6Host      = flag.String("v6", "", "IPv6-only base URL (default: the -server host prefixed with v6.)")
+		v4Host      = flag.String("v4", "", "IPv4-only base URL (default: the -server host prefixed with ipv4.)")
+		v6Host      = flag.String("v6", "", "IPv6-only base URL (default: the -server host prefixed with ipv6.)")
 		families    = flag.String("family", "both", "which families to test: ipv4, ipv6 or both")
 		tcpPort     = flag.Int("tcp-port", 0, "TCP port to test (default: an ephemeral one)")
 		udpPort     = flag.Int("udp-port", 0, "UDP port to test (default: an ephemeral one)")
@@ -74,10 +76,10 @@ func run() error {
 
 	v4URL, v6URL := *v4Host, *v6Host
 	if v4URL == "" {
-		v4URL = familyURL(*server, "v4")
+		v4URL = familyURL(*server, "ipv4")
 	}
 	if v6URL == "" {
-		v6URL = familyURL(*server, "v6")
+		v6URL = familyURL(*server, "ipv6")
 	}
 
 	var wanted []struct {
@@ -147,7 +149,7 @@ func run() error {
 	return nil
 }
 
-// familyURL turns https://drop.example.org into https://v4.drop.example.org.
+// familyURL turns https://drop.example.org into https://ipv4.drop.example.org.
 //
 // The family-specific names exist so that the family under test is never
 // ambiguous: relying on Happy Eyeballs would make it depend on which
@@ -191,7 +193,10 @@ func runFamily(ctx context.Context, out *familyRun, baseURL string, family dropc
 		listenHost = bind.String()
 	}
 
-	tcpResp, err := dropclient.ListenTCP(network, fmt.Sprintf("%s:%d", listenHost, tcpPort))
+	// JoinHostPort, not Sprintf: an IPv6 literal must be bracketed, and "::"
+	// formatted naively yields ":::0".
+	tcpResp, err := dropclient.ListenTCP(network,
+		net.JoinHostPort(listenHost, strconv.Itoa(tcpPort)))
 	if err != nil {
 		return fmt.Errorf("listening for the TCP challenge: %w", err)
 	}
@@ -204,7 +209,8 @@ func runFamily(ctx context.Context, out *familyRun, baseURL string, family dropc
 
 	// The UDP responder must hold the credentials before the probe arrives,
 	// and must answer only requests that authenticate against them.
-	udpResp, err := dropclient.ListenUDP(udpNetwork, fmt.Sprintf("%s:%d", listenHost, udpPort),
+	udpResp, err := dropclient.ListenUDP(udpNetwork,
+		net.JoinHostPort(listenHost, strconv.Itoa(udpPort)),
 		func(username string) (string, bool) {
 			if username != sess.Creds.Username {
 				return "", false

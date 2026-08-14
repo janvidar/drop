@@ -1,12 +1,12 @@
 # dropd configuration.
 #
-# The values below are the real ones for drop-de.quickdc.org; adapt for other
+# The values below are the real ones for drop.quickdc.org; adapt for other
 # deployments. Anything omitted takes the built-in default, and an unknown key
 # is a startup error rather than a silent no-op -- a typo in a rate limit
 # should not be discovered by being abused.
 
 [server]
-name = "drop-de.quickdc.org"
+name = "drop.quickdc.org"
 operator = "quickdc.org"
 # Required. This daemon opens TCP connections to residential addresses, and
 # some of those will be noticed. A complaint with nowhere to go becomes a
@@ -18,9 +18,9 @@ abuse_contact = "abuse@quickdc.org"
 # name and a v6-only name. Clients use the family-specific names so that the
 # family under test is never ambiguous.
 hostnames = [
-  "drop-de.quickdc.org",
-  "v4.drop-de.quickdc.org",
-  "v6.drop-de.quickdc.org",
+  "drop.quickdc.org",
+  "ipv4.drop.quickdc.org",
+  "ipv6.drop.quickdc.org",
 ]
 
 https_addr = ":443"

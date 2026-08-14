@@ -274,3 +274,27 @@ func TestCombine(t *testing.T) {
 		})
 	}
 }
+
+// A family that errored produces no decision at all, and the summary must not
+// describe it. Claiming "passive on IPv6" when IPv6 was never reached asserts
+// more than the run established.
+func TestCombineDoesNotDescribeUntestedFamilies(t *testing.T) {
+	only4 := Combine([]Decision{{Family: IPv4, Mode: ModeActive}})
+	if strings.Contains(only4, "passive on IPv6") {
+		t.Errorf("summary claims something about an untested family: %q", only4)
+	}
+	if !strings.Contains(only4, "not tested") {
+		t.Errorf("summary should say IPv6 was not tested: %q", only4)
+	}
+
+	only6 := Combine([]Decision{{Family: IPv6, Mode: ModeActive}})
+	if strings.Contains(only6, "passive on IPv4") {
+		t.Errorf("summary claims something about an untested family: %q", only6)
+	}
+
+	// With both present, the cross-family wording still applies.
+	both := Combine([]Decision{{Family: IPv4, Mode: ModePassive}, {Family: IPv6, Mode: ModeActive}})
+	if !strings.Contains(both, "good position") {
+		t.Errorf("cross-family advice lost: %q", both)
+	}
+}

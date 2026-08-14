@@ -251,11 +251,45 @@ func listen(cfg Config) (*net.UDPConn, error) {
 	if cfg.Primary.Addr().Is6() {
 		network = "udp6"
 	}
+
+	local := cfg.LocalAddr
+	if !local.IsValid() {
+		// The source address must be pinned, not left to the kernel.
+		//
+		// A wildcard-bound socket picks its source per destination, and RFC
+		// 6724 prefers the address sharing the longest prefix with the target.
+		// The mapping tests deliberately aim at two addresses in the server's
+		// own subnet, so on a host with more than one address of that family
+		// the kernel emits a different source for each test -- and comparing
+		// the resulting mapped addresses reports address-dependent mapping on
+		// a machine with no NAT whatsoever. Discovering the preferred source
+		// for the primary endpoint and binding it keeps every test on one
+		// address, which is what the classification assumes.
+		local = preferredSource(network, cfg.Primary)
+	}
+
 	var laddr *net.UDPAddr
-	if cfg.LocalAddr.IsValid() {
-		laddr = &net.UDPAddr{IP: cfg.LocalAddr.AsSlice()}
+	if local.IsValid() {
+		laddr = &net.UDPAddr{IP: local.AsSlice()}
 	}
 	return net.ListenUDP(network, laddr)
+}
+
+// preferredSource reports the address the kernel would use to reach to.
+//
+// Dialling a UDP socket sends nothing; it only resolves the route, which is
+// exactly the lookup needed here.
+func preferredSource(network string, to netip.AddrPort) netip.Addr {
+	c, err := net.Dial(network, to.String())
+	if err != nil {
+		return netip.Addr{}
+	}
+	defer c.Close()
+	ap, err := netip.ParseAddrPort(c.LocalAddr().String())
+	if err != nil {
+		return netip.Addr{}
+	}
+	return ap.Addr().Unmap()
 }
 
 func localAddrPort(conn *net.UDPConn) netip.AddrPort {

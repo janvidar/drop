@@ -163,8 +163,8 @@ source address. A client that wants both must run the flow twice.
 Servers MUST publish three names:
 
     drop.example.org        A and AAAA
-    v4.drop.example.org     A only
-    v6.drop.example.org     AAAA only
+    ipv4.drop.example.org   A only
+    ipv6.drop.example.org   AAAA only
 
 Clients MUST use the family-specific names rather than relying on Happy
 Eyeballs, which would otherwise make the tested family nondeterministic.
