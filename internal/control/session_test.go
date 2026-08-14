@@ -297,6 +297,47 @@ func TestRejectedRequestDoesNotConsumeSession(t *testing.T) {
 	}
 }
 
+// The field is deprecated but must still decode: the decoder rejects unknown
+// fields, so an older client that sends it would otherwise get a 400 rather
+// than a check.
+func TestInboundStillAcceptsTheDeprecatedControlPort(t *testing.T) {
+	s := newTestServerWith(t, loopbackConfig())
+	h := s.Handler()
+	port := dcClient(t, true)
+
+	sess := openSession(t, h, "127.0.0.1:51343")
+
+	// 51344 deliberately differs from the observed 51343: that inequality is
+	// exactly what the old code turned into a note.
+	body := fmt.Sprintf(`{"tcp":[%d],"control_port":51344}`, port)
+	req := httptest.NewRequest("POST", "/v1/session/"+sess.SessionID+"/inbound",
+		strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:51343"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200; a deprecated field must not fail the request", rec.Code)
+	}
+
+	var resp InboundResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ignored, not acted on. The port deliberately differs from the observed
+	// one, which under the old behaviour produced a NAT-rewriting note.
+	// Ignored, not acted on. Matched on the specific wording the old
+	// behaviour produced -- "rewriting" alone also appears in the
+	// private-address note that a loopback test address legitimately raises.
+	for _, note := range resp.Notes {
+		if strings.Contains(note, "rewriting TCP source ports") ||
+			strings.Contains(note, "left your machine on port") {
+			t.Errorf("control_port was acted on: %q", note)
+		}
+	}
+}
+
 func TestInboundRejectsUnknownFields(t *testing.T) {
 	s := newTestServerWith(t, loopbackConfig())
 	h := s.Handler()

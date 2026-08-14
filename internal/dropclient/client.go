@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"quickdc.org/drop/internal/natdisc"
@@ -56,9 +57,13 @@ type Client struct {
 	Timeout   time.Duration
 
 	http *http.Client
-	// controlPort records the local port of the last control connection, so
-	// the server can be told and can detect source-port rewriting.
-	controlPort int
+	// controlPort is the local port of the last connection this client made.
+	// Compared against the port /v1/whoami reported for that same connection,
+	// a difference is a NAT rewriting source ports.
+	//
+	// Atomic because the transport dials on its own goroutine, so a caller
+	// issuing concurrent requests would otherwise race the write.
+	controlPort atomic.Int64
 }
 
 // New returns a client with sensible defaults.
@@ -88,10 +93,10 @@ func New(baseURL string, family Family, localAddr netip.Addr) *Client {
 				if err != nil {
 					return nil, err
 				}
-				// Remember our own source port so the server can compare it
-				// with what it observed.
+				// Our own source port, for the local comparison against what
+				// /v1/whoami reports.
 				if ap, err := netip.ParseAddrPort(conn.LocalAddr().String()); err == nil {
-					c.controlPort = int(ap.Port())
+					c.controlPort.Store(int64(ap.Port()))
 				}
 				return conn, nil
 			},
@@ -235,6 +240,13 @@ func (c *Client) Server(ctx context.Context) (*ServerDoc, error) {
 	return &doc, nil
 }
 
+// LocalPort reports the local port of the last connection this client made.
+//
+// Compared against the port /v1/whoami reported, a difference is a NAT
+// rewriting source ports - and those two are the ends of one connection, so
+// the comparison is exact. Zero before any request has connected.
+func (c *Client) LocalPort() int { return int(c.controlPort.Load()) }
+
 // Whoami fetches the reflexive address. It costs nothing and needs no session,
 // so a client that only wants its public address can stop here.
 func (c *Client) Whoami(ctx context.Context) (*WhoamiDoc, error) {
@@ -267,9 +279,13 @@ func (c *Client) Inbound(ctx context.Context, sessionID string, tcpPorts, udpPor
 	if len(udpPorts) > 0 {
 		req["udp"] = udpPorts
 	}
-	if c.controlPort != 0 {
-		req["control_port"] = c.controlPort
-	}
+	/*
+	 * control_port is deliberately not sent; it is deprecated. Whether it is
+	 * even correct depends on whether this request reused a connection, which
+	 * the transport decides, so it was right sometimes and wrong the rest of
+	 * the time. LocalPort() and the whoami response give the same fact
+	 * deterministically - two ends of one connection.
+	 */
 	var doc InboundDoc
 	if err := c.do(ctx, "POST", "/v1/session/"+sessionID+"/inbound", req, &doc); err != nil {
 		return nil, err

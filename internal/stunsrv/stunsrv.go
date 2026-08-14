@@ -131,6 +131,15 @@ func (s *Server) Start() error {
 			return fmt.Errorf("stunsrv: binding %s (%s): %w", e.Bind, e.Role, err)
 		}
 		e.conn = conn
+
+		// An endpoint cannot know its advertised address before binding if the
+		// kernel picked the port. Config requires primary_advertise, so in
+		// production this is already set and this default never fires; it
+		// exists so a caller binding port 0 does not have to write the field
+		// after Start, which would race the serve goroutines.
+		if !e.Advertise.IsValid() {
+			e.Advertise = e.LocalAddr()
+		}
 	}
 
 	for _, e := range s.Endpoints {

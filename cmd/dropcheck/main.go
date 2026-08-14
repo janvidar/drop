@@ -37,6 +37,7 @@ type familyRun struct {
 	Whoami   *dropclient.WhoamiDoc     `json:"whoami,omitempty"`
 	Inbound  *dropclient.InboundDoc    `json:"inbound,omitempty"`
 	NAT      *natdisc.Result           `json:"nat,omitempty"`
+	Notes    []string                  `json:"notes,omitempty"`
 	Egress   []dropclient.EgressResult `json:"egress,omitempty"`
 	Decision *dropclient.Decision      `json:"decision,omitempty"`
 	Error    string                    `json:"error,omitempty"`
@@ -181,6 +182,16 @@ func runFamily(ctx context.Context, out *familyRun, baseURL string, family dropc
 	}
 	out.Whoami = whoami
 
+	// Source-port rewriting, detected locally: the port this client bound and
+	// the port the server saw are the two ends of one connection. Doing it
+	// here rather than by sending control_port is what makes it correct.
+	if local := c.LocalPort(); local != 0 && whoami.Port != 0 && local != whoami.Port {
+		out.Notes = append(out.Notes, fmt.Sprintf(
+			"This connection left your machine on port %d but reached the "+
+				"server as port %d, so a NAT is rewriting source ports.",
+			local, whoami.Port))
+	}
+
 	// Arm the listeners *before* asking for the probes. A client that asks
 	// first races the server's connection against its own bind.
 	network := "tcp4"
@@ -283,6 +294,9 @@ func printReport(rep report) {
 			}
 			for _, p := range r.Inbound.UDP {
 				fmt.Printf("  Inbound UDP:     port %d: %s%s\n", p.Port, p.Verdict, detail(p))
+			}
+			for _, n := range r.Notes {
+				fmt.Printf("  Note:            %s\n", wrap(n, 19))
 			}
 			for _, n := range r.Inbound.Notes {
 				fmt.Printf("  Note:            %s\n", wrap(n, 19))

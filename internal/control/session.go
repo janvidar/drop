@@ -56,14 +56,21 @@ type InboundRequest struct {
 	TCP []int `json:"tcp"`
 	UDP []int `json:"udp"`
 
-	// ControlPort is the local source port of this very control connection,
-	// as the client's own socket sees it.
+	// ControlPort is deprecated and ignored.
 	//
-	// It is optional and purely diagnostic. Comparing it with the port the
-	// server observed is what reveals TCP source-port rewriting, and it is the
-	// only local port the server can say anything useful about: a listening
-	// port compared against the nominated port tells the server nothing the
-	// client did not already know.
+	// It was the local source port of the control connection, to be compared
+	// against the port the server observed so that source-port rewriting could
+	// be reported. That is unimplementable for any client sending one request
+	// per connection: the body is assembled before the socket exists, so the
+	// only port such a client can name is its previous connection's, which
+	// differs from the observed one on every host and made this report
+	// rewriting for everybody.
+	//
+	// The field stays so that a request carrying it still decodes - the
+	// decoder rejects unknown fields, so removing it would turn an older
+	// client's request into a 400. Nothing reads it. A client detects
+	// rewriting for itself by comparing its own local port against the one
+	// /v1/whoami reports, which are two ends of one connection.
 	ControlPort int `json:"control_port,omitempty"`
 }
 
@@ -204,12 +211,6 @@ func (s *Server) handleSessionInbound(w http.ResponseWriter, r *http.Request) {
 	// and going to reconfigure a router that cannot help.
 	if class := ipclass.Of(peer.Addr()); !class.Routable() {
 		resp.Notes = append(resp.Notes, class.Advice())
-	}
-	if req.ControlPort != 0 && peer.Port() != 0 && int(peer.Port()) != req.ControlPort {
-		resp.Notes = append(resp.Notes, fmt.Sprintf(
-			"This connection left your machine on port %d but reached us as port %d, "+
-				"so a NAT is rewriting TCP source ports. Port forwarding is therefore "+
-				"required for inbound connections.", req.ControlPort, peer.Port()))
 	}
 
 	resp.ElapsedMS = int(s.now().Sub(start).Milliseconds())

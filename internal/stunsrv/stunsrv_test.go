@@ -20,7 +20,10 @@ import (
 // can be exercised in CI with no public address at all. This is the main
 // reason behaviour discovery is worth building test-first: the alternative is
 // discovering an encoding mistake against a live droplet.
-func startServer(t *testing.T, withAlternate bool) *Server {
+// configure runs against the Server before Start, which is the only safe time
+// to set its fields: Start launches a serve goroutine per endpoint, and those
+// read the configuration on every packet.
+func startServer(t *testing.T, withAlternate bool, configure ...func(*Server)) *Server {
 	t.Helper()
 
 	primary := netip.MustParseAddr("127.0.0.1")
@@ -43,16 +46,17 @@ func startServer(t *testing.T, withAlternate bool) *Server {
 		Software:  "dropd-test",
 		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+	for _, fn := range configure {
+		fn(s)
+	}
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
 
-	// Ports were assigned by the kernel, so the advertised addresses can only
-	// be filled in after binding.
-	for _, e := range s.Endpoints {
-		e.Advertise = e.LocalAddr()
-	}
+	// Ports were assigned by the kernel, so the advertised addresses are only
+	// known after binding. Start fills them in -- doing it here would race the
+	// serve goroutines it has already launched.
 	return s
 }
 
@@ -255,13 +259,14 @@ func TestBehaviourDiscoveryUnknownWithoutChangeSupport(t *testing.T) {
 }
 
 func TestAuthentication(t *testing.T) {
-	s := startServer(t, true)
-	s.Credentials = func(u string) (string, bool) {
-		if u == "good-user" {
-			return "good-pass", true
+	s := startServer(t, true, func(s *Server) {
+		s.Credentials = func(u string) (string, bool) {
+			if u == "good-user" {
+				return "good-pass", true
+			}
+			return "", false
 		}
-		return "", false
-	}
+	})
 
 	t.Run("valid credentials", func(t *testing.T) {
 		msg := roundTripAuth(t, primaryAddr(s), "good-user", "good-pass")
