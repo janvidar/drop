@@ -8,6 +8,11 @@ The protocol specification is [`docs/drop.txt`](docs/drop.txt). It is the
 normative document; this is one implementation of it. The service is
 independent of any particular hub software.
 
+That file is a byte-identical copy, authored as `doc/drop.txt` in the
+[uhub](https://www.uhub.org/) tree. Edit it there, then run
+`scripts/sync-spec.sh` (or `--check` to verify) with `UHUB_DIR` pointing at
+your uhub checkout.
+
 ## Why
 
 ADC guarantees peer-to-peer transfers only when at least one side is *active*,
